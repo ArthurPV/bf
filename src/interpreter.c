@@ -12,8 +12,8 @@ struct BfInterpreterContext {
 #define MAX_JMP_FRAMES_LEN 1024
 	size_t jmp_frames[MAX_JMP_FRAMES_LEN];
 	size_t stack_size;
-	unsigned char *stack; // char* (&)
-	unsigned char *stack_pointer; // char* (&)
+	char *stack; // char* (&)
+	char *stack_pointer; // char* (&)
 };
 
 #define EMIT_BF_ERROR(msg) fprintf(stderr, "error: "msg"\n");
@@ -30,7 +30,12 @@ decrement_stack_pointer__BfInterpreter(struct BfInterpreterContext *ctx);
 /// @param struct BfInterpreterContext* (&)
 /// @param current_ref char* (&)* (&)
 static int
-loop__BfInterpreter(struct BfInterpreterContext *ctx, char **current_ref);
+handle_start_loop__BfInterpreter(struct BfInterpreterContext *ctx, char **current_ref);
+
+/// @param struct BfInterpreterContext* (&)
+/// @param current_ref char* (&)* (&)
+static int
+handle_end_loop__BfInterpreter(struct BfInterpreterContext *ctx, char **current_ref);
 
 /// @param struct BfInterpreterContext* (&)
 static int
@@ -74,74 +79,68 @@ decrement_stack_pointer__BfInterpreter(struct BfInterpreterContext *ctx)
 }
 
 int
-loop__BfInterpreter(struct BfInterpreterContext *ctx, char **current_ref)
+handle_start_loop__BfInterpreter(struct BfInterpreterContext *ctx, char **current_ref)
 {
 	char *current = *current_ref;
-	int res = 0;
 
-	switch (*current) {
-		case '[':
-			if (*ctx->stack_pointer) {
-				if (ctx->jmp_frames_len + 1 < MAX_JMP_FRAMES_LEN) {
-					ctx->jmp_frames[ctx->jmp_frames_len++] = current - ctx->content;
-				} else {
-					goto jmp_frames_overflow;
-				}
+	if (*ctx->stack_pointer) {
+		if (ctx->jmp_frames_len + 1 < MAX_JMP_FRAMES_LEN) {
+			ctx->jmp_frames[ctx->jmp_frames_len++] = current - ctx->content;
+			*current_ref = ++current;
 
-				*current_ref = ++current;
-			} else {
-				size_t count = 0;
+			return 0;
+		}
 
-				while (*current && (count != 0 || *current != ']')) {
-					switch (*current) {
-						case '[':
-							++count;
+		EMIT_BF_ERROR("jmp_frames overflow");
 
-							break;
-						case ']':
-							--count;
-
-							break;
-						default:
-							break;
-					}
-
-					++current;
-				}
-
-				*current_ref = ++current;
-			}
-
-			break;
-		case ']':
-			if (*ctx->stack_pointer) {
-				if (ctx->jmp_frames_len > 0) {
-					*current_ref = (ctx->content + ctx->jmp_frames[ctx->jmp_frames_len - 1]) + 1;
-				} else {
-					goto jmp_frames_overflow;
-				}
-			} else {
-				--ctx->jmp_frames_len;
-				*current_ref = ++current;
-			}
-
-			break;
-		default:
-			break;
+		return 1;
 	}
 
-	goto end;
+	size_t count = 1;
 
-jmp_frames_overflow:
-	EMIT_BF_ERROR("jmp_frames overflow");
+	while (*current && count > 0) {
+		switch (*current) {
+			case '[':
+				++count;
 
-	goto set_error;
+				break;
+			case ']':
+				--count;
 
-set_error:
-	res = 1;
+				break;
+			default:
+				break;
+		}
 
-end:
-	return res;
+		++current;
+	}
+
+	*current_ref = current;
+
+	return 0;
+}
+
+int
+handle_end_loop__BfInterpreter(struct BfInterpreterContext *ctx, char **current_ref)
+{
+	char *current = *current_ref;
+
+	if (*ctx->stack_pointer) {
+		if (ctx->jmp_frames_len > 0) {
+			*current_ref = (ctx->content + ctx->jmp_frames[ctx->jmp_frames_len - 1]) + 1;
+		} else {
+			EMIT_BF_ERROR("jmp_frames overflow");
+
+			return 1;
+		}
+
+		return 0;
+	}
+
+	--ctx->jmp_frames_len;
+	*current_ref = ++current;
+
+	return 0;
 }
 
 int
@@ -176,8 +175,11 @@ interpret_file__BfInterpreter(struct BfInterpreterContext *ctx)
 
 				break;
 			case '[':
+				res = handle_start_loop__BfInterpreter(ctx, &current);
+
+				continue;
 			case ']':
-				loop__BfInterpreter(ctx, &current);
+				res = handle_end_loop__BfInterpreter(ctx, &current);
 
 				continue;
 			default:
@@ -218,7 +220,7 @@ read_file__BfInterpreter(const char *file, FILE *stream)
 
 #define Kb 1024
 	size_t stack_size = Kb * 32;
-	unsigned char *stack = malloc(stack_size);
+	char *stack = malloc(stack_size);
 #undef Kb
 
 	if (!stack) {
